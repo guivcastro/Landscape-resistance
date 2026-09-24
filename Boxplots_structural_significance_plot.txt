@@ -1,0 +1,314 @@
+import rasterio
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from rasterio.warp import reproject, Resampling
+from scipy.stats import mannwhitneyu
+
+# Working directory
+base = r"/PATH/TO/FILES/"
+
+# Loading Habitat files
+habitats = {
+    "Broadleaved woodland": {
+        "m1": base + "HR_30m_high_pd_broadleaved.tif",
+        "m2": base + "SR_30m_tri_high_pd_broadleaved.tif",
+        "m3": base + "CC_30m_float_high_pd_broadleaved.tif",
+        "sig": base + "NDVI_significance_2022_high_pd_broadleaved.tif"
+    },
+    "Coniferous woodland": {
+        "m1": base + "HR_30m_high_pd_coniferous.tif",
+        "m2": base + "SR_30m_tri_high_pd_coniferous.tif",
+        "m3": base + "CC_30m_float_high_pd_coniferous.tif",
+        "sig": base + "NDVI_significance_2022_high_pd_conifer.tif"
+    },
+    "Arable": {
+        "m1": base + "HR_30m_high_pd_arable.tif",
+        "m2": base + "SR_30m_tri_high_pd_arable.tif",
+        "m3": base + "CC_30m_float_high_pd_arable.tif",
+        "sig": base + "NDVI_significance_2022_high_pd_arable.tif"
+    },
+    "Grassland": {
+        "m1": base + "HR_30m_high_pd_grassland.tif",
+        "m2": base + "SR_30m_tri_high_pd_grassland.tif",
+        "m3": base + "CC_30m_float_high_pd_grassland.tif",
+        "sig": base + "NDVI_significance_2022_high_pd_grassland.tif"
+    },
+    "Heathland": {
+        "m1": base + "HR_30m_high_pd_heathland.tif",
+        "m2": base + "SR_30m_tri_high_pd_heathland.tif",
+        "m3": base + "CC_30m_float_high_pd_heathland.tif",
+        "sig": base + "NDVI_significance_2022_high_pd_heathland.tif"
+    }
+}
+
+# Study area rasters
+study_area_paths = {
+    "HR": base + "HR_30m_high_pd.tif",
+    "CC": base + "CC_30m_float_high_pd.tif",
+    "SR": base + "SR_30m_tri_high_pd.tif",
+    "sig": base + "NDVI_significance_2022_high_pd.tif"
+}
+
+# Functions
+def read_raster(path):
+    with rasterio.open(path) as src:
+        data = src.read(1)
+        nodata = src.nodata
+        profile = src.profile
+    return data, nodata, profile
+
+def align_raster(src_data, src_profile, ref_profile, ref_shape):
+    dst = np.empty(ref_shape, dtype=src_data.dtype)
+    reproject(
+        source=src_data,
+        destination=dst,
+        src_transform=src_profile['transform'],
+        src_crs=src_profile['crs'],
+        dst_transform=ref_profile['transform'],
+        dst_crs=ref_profile['crs'],
+        resampling=Resampling.nearest
+    )
+    return dst
+
+def process_habitat(habitat_name, paths):
+    m1, n1, p1 = read_raster(paths["m1"])
+    ref_shape, ref_profile = m1.shape, p1
+
+    m2, n2, p2 = read_raster(paths["m2"])
+    m3, n3, p3 = read_raster(paths["m3"])
+    res, nr, pr = read_raster(paths["sig"])
+
+    m2 = align_raster(m2, p2, ref_profile, ref_shape)
+    m3 = align_raster(m3, p3, ref_profile, ref_shape)
+    res = align_raster(res, pr, ref_profile, ref_shape)
+
+    m1, m2, m3, res = (
+        m1.flatten(),
+        m2.flatten(),
+        m3.flatten(),
+        res.flatten()
+    )
+
+    mask = (
+        (m1 != n1) &
+        (m2 != n2) &
+        (m3 != n3) &
+        (res != nr) &
+        np.isfinite(m1) &
+        np.isfinite(m2) &
+        np.isfinite(m3) &
+        np.isfinite(res) &
+        (res != -2)
+    )
+
+    m1 = m1[mask]
+    m2 = m2[mask]
+    m3 = m3[mask]
+    res = res[mask].astype(int)
+
+    df = pd.DataFrame({
+        "Habitat": habitat_name,
+        "HR": m1,
+        "SR": m2,
+        "CC": m3,
+        "Resistance": res
+    })
+
+    df = df[df["Resistance"].isin([-1, 0, 1])]
+    df["Resistance_str"] = df["Resistance"].astype(str)
+
+    return df
+
+def process_study_area(paths):
+    m_HR, n_HR, p_HR = read_raster(paths["HR"])
+    m_CC, n_CC, p_CC = read_raster(paths["CC"])
+    m_SR, n_SR, p_SR = read_raster(paths["SR"])
+    res, n_res, p_res = read_raster(paths["sig"])
+
+    shape = m_HR.shape
+
+    m_CC = align_raster(m_CC, p_CC, p_HR, shape)
+    m_SR = align_raster(m_SR, p_SR, p_HR, shape)
+    res = align_raster(res, p_res, p_HR, shape)
+
+    m_HR, m_CC, m_SR, res = (
+        m_HR.flatten(),
+        m_CC.flatten(),
+        m_SR.flatten(),
+        res.flatten()
+    )
+
+    mask = (
+        (m_HR != n_HR) &
+        (m_CC != n_CC) &
+        (m_SR != n_SR) &
+        (res != n_res) &
+        np.isfinite(m_HR) &
+        np.isfinite(m_CC) &
+        np.isfinite(m_SR) &
+        np.isfinite(res) &
+        (res != -2)
+    )
+
+    m_HR = m_HR[mask]
+    m_CC = m_CC[mask]
+    m_SR = m_SR[mask]
+    res = res[mask].astype(int)
+
+    df = pd.DataFrame({
+        "Habitat": "Study Area",
+        "HR": m_HR,
+        "CC": m_CC,
+        "SR": m_SR,
+        "Resistance": res
+    })
+
+    df = df[df["Resistance"].isin([-1, 0, 1])]
+    df["Resistance_str"] = df["Resistance"].astype(str)
+
+    return df
+
+# Combine data
+all_habitats = pd.concat(
+    [process_habitat(name, paths) for name, paths in habitats.items()],
+    ignore_index=True
+)
+
+study_area = process_study_area(study_area_paths)
+all_data = pd.concat(
+    [all_habitats, study_area],
+    ignore_index=True
+)
+
+print(f"Total valid pixels: {len(all_data)}")
+
+# Plot labels and settings
+labels = {"-1": "Non-resistant", "0": "Not significant", "1": "High resistance"}
+metric_order = ["HR", "CC", "SR"]
+res_classes = ["-1", "0", "1"]
+
+# Statistics
+def compute_stars(df, metric_order, res_classes):
+    stars_dict = {}
+
+    for group in df["Habitat"].unique():
+        habitat_df = df[df["Habitat"] == group]
+        stars_dict[group] = {}
+
+        for metric in metric_order:
+            stars_dict[group][metric] = {}
+
+            for cls in res_classes:
+                group_vals = habitat_df[habitat_df["Resistance_str"] == cls][metric]
+
+                if len(group_vals) == 0:
+                    stars_dict[group][metric][cls] = ""
+                    continue
+
+                sig_count = 0
+
+                for other_cls in res_classes:
+                    if cls == other_cls:
+                        continue
+
+                    other_vals = habitat_df[habitat_df["Resistance_str"] == other_cls][metric]
+
+                    if len(other_vals) == 0:
+                        continue
+
+                    stat, p_val = mannwhitneyu(group_vals, other_vals, alternative="two-sided")
+
+                    if p_val < 0.05:
+                        sig_count += 1
+
+                if sig_count == 1:
+                    stars_dict[group][metric][cls] = "*"
+                elif sig_count == 2:
+                    stars_dict[group][metric][cls] = "**"
+                else:
+                    stars_dict[group][metric][cls] = ""
+
+    return stars_dict
+
+stars = compute_stars(all_data, metric_order, res_classes)
+
+# Print significance
+for habitat in stars:
+    print(f"\n=== Habitat: {habitat} ===")
+    for metric in metric_order:
+        print(f"\nMetric: {metric}")
+        for cls in res_classes:
+            print(f"{labels[cls]}: {stars[habitat][metric][cls]}")
+
+# Plotting
+sns.set_style("white")
+
+habitat_names = [
+    "Study Area",
+    "Broadleaved woodland",
+    "Coniferous woodland",
+    "Heathland",
+    "Arable",
+    "Grassland"
+]
+
+fig, axes = plt.subplots(
+    len(habitat_names),
+    len(metric_order),
+    figsize=(20, 7 * len(habitat_names)),
+    sharey='col'
+)
+
+colors = {"-1": "#734C00", "0": "#828282", "1": "#01665E"}
+
+for i, habitat in enumerate(habitat_names):
+    habitat_df = all_data[all_data["Habitat"] == habitat]
+
+    for j, metric in enumerate(metric_order):
+        ax = axes[i, j]
+
+        sns.boxplot(
+            ax=ax,
+            data=habitat_df,
+            x="Resistance_str",
+            y=metric,
+            order=res_classes,
+            palette=colors,
+            showfliers=False
+        )
+
+        ax.set_xticklabels([])
+        ax.tick_params(axis='x', labelsize=30)
+        ax.tick_params(axis='y', labelsize=30)
+
+        if i == 0:
+            ax.set_title(metric, fontsize=18, fontweight="bold")
+
+        if j == 0:
+            ax.set_ylabel(habitat, fontsize=16)
+        else:
+            ax.set_ylabel("")
+
+        if i == len(habitat_names) - 1:
+            ax.set_xlabel("Resistance Class", fontsize=16)
+        else:
+            ax.set_xlabel("")
+
+        # FIXED Y-LIMITS BY METRIC
+        if metric == "SR":          # Surface rugosity
+            ax.set_ylim(0, 17)
+        elif metric == "CC":        # Canopy cover
+            ax.set_ylim(0, 110)
+        else:                       # Height range
+            ax.set_ylim(0, 55)
+
+# Legend
+patches = [mpatches.Patch(color=colors[r], label=labels[r]) for r in res_classes]
+fig.legend(handles=patches, loc="upper center", ncol=3, fontsize=16)
+
+plt.tight_layout(rect=[0, 0, 1, 0.95])
+plt.subplots_adjust(wspace=0.35, hspace=0.2)
+plt.show()

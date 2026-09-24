@@ -1,0 +1,70 @@
+import geopandas as gpd
+import pandas as pd
+
+# File path
+shp_path = "/PATH/TO/.shp"
+
+# Load the shapefile
+gdf = gpd.read_file(shp_path)
+
+print(f"Shapefile loaded. Total features: {len(gdf)}")
+
+# Reclassify land cover classes
+def reclassify_habitats(val):
+    if val in [4, 5, 6, 7]:
+        return 10  # Grassland
+    elif val in [9, 10]:
+        return 11  # Heathland
+    else:
+        return val
+
+# Apply reclassification
+gdf['reclass_mode'] = gdf['mode'].apply(reclassify_habitats)
+print("Reclassification complete.")
+
+# ANALYSIS & PROJECTION
+# Ensure the CRS is in meters for accurate area calculation
+if gdf.crs.is_geographic:
+    print("Warning: CRS is in degrees. Projecting to EPSG:3857...")
+    gdf = gdf.to_crs(epsg=3857) 
+
+# Calculate area for every individual polygon (patch)
+gdf['area_m2'] = gdf.geometry.area
+
+# Define the target classes
+class_names = {
+    1: "Broadleaved woodland",
+    2: "Coniferous woodland",
+    3: "Arable",
+    10: "Grassland",
+    11: "Heathland"
+}
+
+# Filter GDF to only include the specific habitats of interest
+# This ensures the "global mean" only considers these 5 categories
+gdf_filtered = gdf[gdf['reclass_mode'].isin(class_names.keys())].copy()
+
+# 1. Calculate mean per class
+results_df = gdf_filtered.groupby('reclass_mode')['area_m2'].mean().reset_index()
+results_df['Class'] = results_df['reclass_mode'].map(class_names)
+
+# 2. Calculate Mean for the whole study area (all target patches combined)
+overall_mean_patch_size = gdf_filtered['area_m2'].mean()
+
+# Outputs
+# Rename and organize the per-class dataframe
+results_df = results_df.rename(columns={
+    "reclass_mode": "Class Value",
+    "area_m2": "Mean Patch Size (m2)"
+})
+
+print("\n--- Results by Habitat Class ---")
+print(results_df[['Class', 'Class Value', 'Mean Patch Size (m2)']])
+
+print("\n--- Global Statistics ---")
+print(f"Total number of patches analyzed: {len(gdf_filtered)}")
+print(f"Mean Patch Size (Whole Area): {overall_mean_patch_size:.2f} m2")
+
+# Save to CSV
+results_df.to_csv("mean_patch_sizes_vector.csv", index=False)
+print("\nResults saved to mean_patch_sizes_vector.csv")

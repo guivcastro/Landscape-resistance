@@ -1,0 +1,102 @@
+import rasterio
+from rasterio.warp import reproject, Resampling
+import numpy as np
+from sklearn.decomposition import PCA
+
+# Input rasters
+HR_path = "/PATH/TO/FILE/HR_30m_high_pd.tif"
+CC_path = "/PATH/TO/FILE/CC_30m_float_high_pd.tif"
+SR_path = "/PATH/TO/FILE/SR_30m_tri_high_pd.tif"
+
+metrics = ["HR", "CC", "SR"]
+
+# Read raster
+def read_raster(path):
+    with rasterio.open(path) as src:
+        data = src.read(1).astype(np.float32)
+        nodata = src.nodata
+
+        if nodata is not None:
+            data[data == nodata] = np.nan
+
+        return data, src.transform, src.crs
+
+
+# Resample of reference grid
+def resample_to_match(source_path, ref_shape, ref_transform, ref_crs):
+    with rasterio.open(source_path) as src:
+        data_resampled = np.empty(ref_shape, dtype=np.float32)
+
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=data_resampled,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=ref_transform,
+            dst_crs=ref_crs,
+            resampling=Resampling.bilinear
+        )
+
+        nodata = src.nodata
+
+        if nodata is not None:
+            data_resampled[data_resampled == nodata] = np.nan
+
+    return data_resampled
+
+
+# Load reference (HR raster)
+HR, ref_transform, ref_crs = read_raster(HR_path)
+CC = resample_to_match(CC_path, HR.shape, ref_transform, ref_crs)
+SR = resample_to_match(SR_path, HR.shape, ref_transform, ref_crs)
+
+HR_f = HR.ravel()
+CC_f = CC.ravel()
+SR_f = SR.ravel()
+
+# Filter for valid pixels
+mask = (
+    ~np.isnan(HR_f) &
+    ~np.isnan(CC_f) &
+    ~np.isnan(SR_f)
+)
+
+HR_f = HR_f[mask]
+CC_f = CC_f[mask]
+SR_f = SR_f[mask]
+
+# Stack (pixels × variables)
+X = np.vstack((HR_f, CC_f, SR_f)).T
+
+print(f"\nValid pixels used: {X.shape[0]}")
+
+# Z-score normalization
+X_mean = X.mean(axis=0)
+X_std = X.std(axis=0)
+
+X_scaled = (X - X_mean) / X_std
+
+# PCA
+pca = PCA(n_components=3)
+scores = pca.fit_transform(X_scaled)
+loadings = pca.components_
+
+# Explained variance
+print("Explained variance ratio:")
+for i, var in enumerate(pca.explained_variance_ratio_):
+    print(f"PC{i+1}: {var:.4f}")
+
+# Loadings
+print("\nLoadings:")
+for i, pc in enumerate(loadings):
+    print(f"\nPC{i+1}:")
+    for j, metric in enumerate(metrics):
+        print(f"  {metric}: {pc[j]:.4f}")
+
+# Correlation matrix (on standardized data)
+corr = np.corrcoef(X_scaled.T)
+
+print("\nCorrelation matrix:")
+for i in range(len(metrics)):
+    row = "  ".join([f"{corr[i,j]:.2f}" for j in range(len(metrics))])
+    print(f"{metrics[i]}: {row}")

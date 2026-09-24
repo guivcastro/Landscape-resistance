@@ -1,0 +1,118 @@
+### This script generates moving windows with no data pixels as no data and measures mean and std of all cells within the moving window apart from the central pixel
+
+
+import numpy as np
+import rasterio
+from scipy import ndimage
+import matplotlib.pyplot as plt
+import os
+
+# Input raster
+raster_path = "/PATH/TO/PC1.tif"
+
+# Output paths
+out_dir = os.path.dirname(raster_path)
+base = os.path.splitext(os.path.basename(raster_path))[0]
+
+# Load raster
+with rasterio.open(raster_path) as src:
+    data = src.read(1).astype(np.float32)
+    profile = src.profile
+    nodata = src.nodata
+
+# Replace nodata with NaN
+if nodata is not None:
+    data[data == nodata] = np.nan
+
+rows, cols = data.shape
+
+# Valid mask
+valid_mask = ~np.isnan(data)
+
+# Replace NaN with 0 for convolution
+data_filled = np.nan_to_num(data, nan=0.0)
+
+# YxY kernel excluding the center pixel
+w = 33
+
+kernel = np.ones((w, w), dtype=np.float32)
+
+# Remove central pixel
+center = w // 2
+kernel[center, center] = 0
+
+## Convolutions
+# Number of valid neighboring pixels
+n = ndimage.convolve(
+    valid_mask.astype(np.float32),
+    kernel,
+    mode='constant',
+    cval=0.0
+)
+
+# Sum of neighboring values
+sumI = ndimage.convolve(
+    data_filled,
+    kernel,
+    mode='constant',
+    cval=0.0
+)
+
+# Sum of squared neighboring values
+sumI2 = ndimage.convolve(
+    data_filled**2,
+    kernel,
+    mode='constant',
+    cval=0.0
+)
+
+# Mean
+mean = np.full((rows, cols), np.nan, dtype=np.float32)
+
+valid = n > 0
+
+mean[valid] = sumI[valid] / n[valid]
+
+# Standard deviation
+std = np.full((rows, cols), np.nan, dtype=np.float32)
+
+std[valid] = np.sqrt(
+    (sumI2[valid] / n[valid]) - (mean[valid] ** 2)
+)
+
+# Preserve original nodata cells
+mean[~valid_mask] = np.nan
+std[~valid_mask] = np.nan
+
+# Save rasters
+profile.update(
+    dtype=rasterio.float32,
+    count=1,
+    compress='lzw',
+    nodata=np.nan
+)
+
+mean_out = os.path.join(out_dir, f"{base}_mean_33x33.tif")
+std_out  = os.path.join(out_dir, f"{base}_std_33x33.tif")
+
+with rasterio.open(mean_out, "w", **profile) as dst:
+    dst.write(mean.astype(rasterio.float32), 1)
+
+with rasterio.open(std_out, "w", **profile) as dst:
+    dst.write(std.astype(rasterio.float32), 1)
+
+print(f"Saved mean raster: {mean_out}")
+print(f"Saved std raster: {std_out}")
+
+# Visualisation
+fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+
+im1 = axes[0].imshow(mean, cmap="viridis")
+axes[0].set_title("Mean (17x17 excluding center)")
+plt.colorbar(im1, ax=axes[0], shrink=0.7)
+
+im2 = axes[1].imshow(std, cmap="plasma")
+axes[1].set_title("STD (17x17 excluding center)")
+plt.colorbar(im2, ax=axes[1], shrink=0.7)
+
+plt.show()

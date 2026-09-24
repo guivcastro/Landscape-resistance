@@ -1,0 +1,154 @@
+import os
+import numpy as np
+import pandas as pd
+import rasterio
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import gaussian_kde
+
+sns.set_style(white)
+
+# Paths to data
+OUTPUT_DIR = /PATH/TO/FILES.tif
+CSV_PATH = /PATH/to/NDVI_resistance_pixel_summary.csv
+
+# Load .csv file with %values
+summary_df = pd.read_csv(CSV_PATH)
+summary_df['Habitat'] = summary_df['Habitat'].str.strip().str.lower()
+
+# Load resistance .tif files
+res_files = [f for f in os.listdir(OUTPUT_DIR)
+             if f.startswith(NDVI_resistance_2022_) and f.endswith(.tif)]
+
+data_list = []
+
+for f in res_files
+    path = os.path.join(OUTPUT_DIR, f)
+    habitat_name = f.replace(NDVI_resistance_2022_, ).replace(.tif, ).strip().lower()
+    
+    with rasterio.open(path) as src
+        arr = src.read(1)
+    
+    # Flatten and remove NaNs
+    pixels = arr.flatten()
+    pixels = pixels[np.isfinite(pixels)]
+    
+    df = pd.DataFrame({
+        Resistance pixels,
+        Habitat habitat_name
+    })
+    data_list.append(df)
+
+plot_df = pd.concat(data_list, axis=0)
+
+# List of habitats in order
+habitats = plot_df['Habitat'].unique()
+all_resistance = plot_df['Resistance'].dropna()
+
+# x-axis values for KDE
+x_min = 0
+x_max = plot_df['Resistance'].max()
+x_vals = np.linspace(x_min, x_max, 500)
+
+# Function to plot resistance values
+def plot_colored_kde_smooth(ax, data, row=None, title=None)
+    if len(data) == 0
+        return
+
+    kde = gaussian_kde(data, bw_method=0.1)
+    kde_vals = kde(x_vals)
+
+    if row is not None
+        pos_pct = row.get(Positive_%, 0)
+        neg_pct = row.get(Negative_%, 0)
+        ns_pct  = row.get(Non_significant_%, 0)
+
+        y_sorted = np.sort(data)
+        ns_low_pct = neg_pct
+        ns_high_pct = neg_pct + ns_pct
+
+        # Exact threshold values from percentiles
+        x_neg_max = np.percentile(y_sorted, ns_low_pct)
+        x_ns_max  = np.percentile(y_sorted, ns_high_pct)
+
+        # Segments for colours
+        segments = [
+            (x_vals = x_neg_max, #734C00), #Negative
+            ((x_vals  x_neg_max) & (x_vals = x_ns_max), #828282), #Non-significant
+            (x_vals  x_ns_max, #01665E) #Positive
+        ]
+
+        # Plot each segment; join segments exactly at threshold points
+        for i, (mask, color) in enumerate(segments)
+            if i  len(segments) - 1
+                next_mask, _ = segments[i + 1]
+                extended_mask = mask  (next_mask & (x_vals == x_vals[mask][-1]))
+            else
+                extended_mask = mask
+            ax.fill_between(x_vals[extended_mask], 0, kde_vals[extended_mask], color=color, alpha=0.7, linewidth=0)
+
+    # Adding axis horizontal and vertical lines
+    ax.axhline(0, color='black', linewidth=0.5)
+    ax.axvline(0, color='black', linewidth=0.5)
+
+    # Adding vertical dashed line at x = 1
+    ax.axvline(1, color='black', linestyle='--', linewidth=0.5, zorder=10)
+
+    from matplotlib.ticker import FormatStrFormatter
+
+    # Remove all axes outlinesspines
+    for spine in ax.spines.values()
+        spine.set_visible(False)
+    ax.tick_params(left=False, bottom=False)
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylabel(Density)
+
+    # Force y-axis labels as integers (no decimals)
+    ax.yaxis.set_major_formatter(FormatStrFormatter('%d'))
+
+    if title
+        ax.set_title(title, fontsize=11, fontweight='bold', loc='left')
+
+# Desired habitat order
+habitat_order = [broadleaf, conifer, heathland, arable, grassland]
+
+# Filter habitats actually present in the data
+habitat_order = [h for h in habitat_order if h in plot_df['Habitat'].unique()]
+
+# Plotting
+n_habitats = len(habitat_order)
+fig, axes = plt.subplots(
+    nrows=n_habitats,
+    ncols=1,
+    figsize=(8, 2.5  n_habitats),
+    sharex=True
+)
+axes = np.atleast_1d(axes)
+
+# Organise habitats in desired order
+for i, habitat in enumerate(habitat_order)
+    ax = axes[i]
+    subset = plot_df.loc[plot_df['Habitat'] == habitat, 'Resistance'].dropna()
+    
+    # Get corresponding row from summary_df
+    subset_summary = summary_df.loc[summary_df['Habitat'] == habitat]
+    if not subset_summary.empty
+        row = subset_summary.iloc[0]
+    else
+        print(fWarning no summary data for habitat '{habitat}')
+        row = None
+    
+    plot_colored_kde_smooth(ax, subset, row=row, title=habitat.capitalize())
+
+    # Increase axis tick label size
+    ax.tick_params(axis='both', which='major', labelsize=16)
+
+# Final adjustments
+axes[-1].set_xlabel(Resistance)
+plt.tight_layout()
+plt.show()
+
+# Save figure
+output_path = os.path.join(OUTPUT_DIR, NDVI_resistance_plot.png)
+fig.savefig(output_path, dpi=330, format='png', bbox_inches='tight')

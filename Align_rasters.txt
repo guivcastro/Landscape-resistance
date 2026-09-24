@@ -1,0 +1,72 @@
+# ALIGN (MATCH GRID) ALL TIFFS TO A REFERENCE TIFF
+
+# !pip install rasterio
+import os
+import glob
+import rasterio
+from rasterio.warp import reproject, Resampling
+
+# USER SETTINGS
+input_folder = "/PATH/TO/FOLDER"
+reference_filename = "PC1.tif"
+output_folder = os.path.join(input_folder, "aligned_output")
+
+os.makedirs(output_folder, exist_ok=True)
+
+# Load reference .tif
+reference_path = os.path.join(input_folder, reference_filename)
+
+with rasterio.open(reference_path) as ref:
+    ref_meta = ref.meta.copy()
+    ref_crs = ref.crs
+    ref_transform = ref.transform
+    ref_width = ref.width
+    ref_height = ref.height
+
+print("Reference grid:")
+print("CRS:", ref_crs)
+print("Size:", ref_width, "x", ref_height)
+
+# Find .tif files
+all_tifs = glob.glob(os.path.join(input_folder, "*.tif"))
+target_files = [f for f in all_tifs if os.path.basename(f) != reference_filename]
+
+print("\nFound", len(target_files), "files to align.")
+
+# Align function
+def match_to_reference(target_path):
+
+    print("\nProcessing:", os.path.basename(target_path))
+
+    with rasterio.open(target_path) as src:
+
+        output_path = os.path.join(
+            output_folder,
+            "aligned_" + os.path.basename(target_path)
+        )
+
+        kwargs = ref_meta.copy()
+        kwargs.update({
+            "height": ref_height,
+            "width": ref_width,
+            "transform": ref_transform
+        })
+
+        with rasterio.open(output_path, "w", **kwargs) as dst:
+
+            for i in range(1, src.count + 1):
+                reproject(
+                    source=rasterio.band(src, i),
+                    destination=rasterio.band(dst, i),
+                    src_transform=src.transform,
+                    src_crs=src.crs,
+                    dst_transform=ref_transform,
+                    dst_crs=ref_crs,
+                    resampling=Resampling.nearest
+                )
+
+    print("Saved:", output_path)
+
+# Run
+for tif in target_files:
+    match_to_reference(tif)

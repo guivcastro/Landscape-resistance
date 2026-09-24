@@ -1,0 +1,242 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import rasterio
+from rasterio.warp import reproject, Resampling
+import matplotlib.gridspec as gridspec
+from scipy.stats import spearmanr
+
+# Plot style
+plt.rcParams.update({
+    "xtick.labelsize": 18,
+    "ytick.labelsize": 18,
+    "axes.labelsize": 20,
+    "axes.titlesize": 18
+})
+
+Y_LIM = (-0.5, 0.4)
+
+# Functions
+def read_raster(path):
+    with rasterio.open(path) as src:
+        data = src.read(1).astype(np.float32)
+        transform = src.transform
+        crs = src.crs
+        nodata = src.nodata
+        if nodata is not None:
+            data[data == nodata] = np.nan
+        data[~np.isfinite(data)] = np.nan
+    return data, transform, crs
+
+
+def resample_to_match(path, ref_shape, ref_transform, ref_crs):
+    with rasterio.open(path) as src:
+        out = np.full(ref_shape, np.nan, dtype=np.float32)
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=out,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=ref_transform,
+            dst_crs=ref_crs,
+            resampling=Resampling.bilinear
+        )
+        if src.nodata is not None:
+            out[out == src.nodata] = np.nan
+        out[~np.isfinite(out)] = np.nan
+    return out
+
+def binned_response(x, y, bins=60):
+    edges = np.linspace(
+        np.nanmin(x),
+        np.nanmax(x),
+        bins
+    )
+
+    idx = np.digitize(x, edges)
+    means = np.array([
+        np.nanmean(y[idx == i])
+        for i in range(1, len(edges))
+    ])
+
+    stds = np.array([
+        np.nanstd(y[idx == i])
+        for i in range(1, len(edges))
+    ])
+    centers = (edges[:-1] + edges[1:]) / 2
+    return centers, means, stds
+
+def clip_99(x):
+    return np.clip(
+        x,
+        np.nanmin(x),
+        np.nanpercentile(x, 99.5)
+    )
+
+def lock_axis(ax):
+    ax.set_ylim(*Y_LIM)
+    ax.set_autoscale_on(False)
+    ax.minorticks_off()
+
+
+# Data
+base = r"/PATH/TO/FILES"
+
+ndvi_path = f"{base}/NDVI_resistance_2022_high_pd.tif"
+
+habitats = [
+    "broadleaved",
+    "coniferous",
+    "heathland",
+    "arable",
+    "grassland"
+]
+
+metrics = {
+    "Canopy cover": "CC_30m_float_high_pd",
+    "Height range": "HR_30m_high_pd",
+    "Surface rugosity": "SR_30m_tri_high_pd"
+}
+
+colors = {
+    "Canopy cover": {
+        "line": "#45683C",
+        "band": "#A1C397"
+    },
+    "Height range": {
+        "line": "#8E6015",
+        "band": "#D9BF82"
+    },
+    "Surface rugosity": {
+        "line": "#273A4E",
+        "band": "#89B5D1"
+    }
+}
+
+# Loading data
+ndvi, ref_transform, ref_crs = read_raster(ndvi_path)
+
+# avoid invalid log values
+ndvi[ndvi <= 0] = np.nan
+ndvi_log = np.log(ndvi)
+ndvi_log[~np.isfinite(ndvi_log)] = np.nan
+
+# Figure
+fig = plt.figure(figsize=(24, 30))
+
+gs = gridspec.GridSpec(
+    nrows=len(habitats) + 1,
+    ncols=len(metrics),
+    height_ratios=[1.2] + [1] * len(habitats),
+    hspace=0.35,
+    wspace=0.15
+)
+
+axes = []
+
+# Top row
+for col, (metric_name, metric_base) in enumerate(metrics.items()):
+    ax = fig.add_subplot(gs[0, col])
+    axes.append(ax)
+    metric_path = f"{base}/{metric_base}.tif"
+    x = resample_to_match(
+        metric_path,
+        ndvi_log.shape,
+        ref_transform,
+        ref_crs
+    )
+
+    x = clip_99(x)
+    valid = np.isfinite(ndvi_log) & np.isfinite(x)
+    x_f = x[valid]
+    y_f = ndvi_log[valid]
+
+    # Spearman
+    rho, p = spearmanr(x_f, y_f)
+    print(f"\nAll habitats — {metric_name}")
+    print("-" * 50)
+    print(f"Spearman ρ = {rho:.4f}")
+    print(f"p-value    = {p:.4e}")
+    centers, means, stds = binned_response(x_f, y_f)
+    color = colors[metric_name]
+    ax.plot(
+        centers,
+        means,
+        color=color["line"],
+        linewidth=2
+    )
+
+    ax.fill_between(
+        centers,
+        means - stds,
+        means + stds,
+        color=color["band"],
+        alpha=0.3
+    )
+
+    ax.set_xlabel(metric_name)
+    ax.set_ylabel("log(NDVI resistance)")
+    ax.grid(False)
+    lock_axis(ax)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+# Habitat types
+for row, habitat in enumerate(habitats, start=1):
+    habitat_label = habitat.replace("_", " ").title()
+
+    for col, (metric_name, metric_base) in enumerate(metrics.items()):
+        ax = fig.add_subplot(gs[row, col])
+        axes.append(ax)
+        metric_path = f"{base}/{metric_base}_{habitat}.tif"
+        x = resample_to_match(
+            metric_path,
+            ndvi_log.shape,
+            ref_transform,
+            ref_crs
+        )
+
+        x = clip_99(x)
+        valid = np.isfinite(ndvi_log) & np.isfinite(x)
+        x_f = x[valid]
+        y_f = ndvi_log[valid]
+        if len(x_f) < 100:
+            continue
+
+        # Spearman
+        rho, p = spearmanr(x_f, y_f)
+        print(f"\n{habitat_label} — {metric_name}")
+        print("-" * 50)
+        print(f"Spearman ρ = {rho:.4f}")
+        print(f"p-value    = {p:.4e}")
+
+        centers, means, stds = binned_response(x_f, y_f)
+        color = colors[metric_name]
+
+        ax.plot(
+            centers,
+            means,
+            color=color["line"],
+            linewidth=2
+        )
+
+        ax.fill_between(
+            centers,
+            means - stds,
+            means + stds,
+            color=color["band"],
+            alpha=0.3
+        )
+
+        if col == 0:
+            ax.set_ylabel(
+                f"{habitat_label}\nlog(NDVI resistance)"
+            )
+
+        ax.set_xlabel(metric_name)
+        ax.grid(False)
+        lock_axis(ax)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+plt.tight_layout()
+plt.show()
