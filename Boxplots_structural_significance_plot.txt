@@ -247,7 +247,7 @@ for habitat in stars:
 sns.set_style("white")
 
 habitat_names = [
-    "Study Area",
+    "Study area",
     "Broadleaved woodland",
     "Coniferous woodland",
     "Heathland",
@@ -297,7 +297,6 @@ for i, habitat in enumerate(habitat_names):
         else:
             ax.set_xlabel("")
 
-        # FIXED Y-LIMITS BY METRIC
         if metric == "SR":          # Surface rugosity
             ax.set_ylim(0, 17)
         elif metric == "CC":        # Canopy cover
