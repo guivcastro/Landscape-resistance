@@ -20,8 +20,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # Data directory
-DATA_DIR = '/work/scratch-pw5/guicas/NDVI/Resistance/raw_habitat'
-OUTPUT_DIR = "/work/scratch-pw5/guicas/NDVI/Resistance/outputs"
+DATA_DIR = '/PATH/TO/FILES'
+OUTPUT_DIR = '/PATH/TO/FILES'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 BASELINE_START = 1991
